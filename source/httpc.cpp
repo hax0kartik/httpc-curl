@@ -1,31 +1,34 @@
 #include "httpc.h"
-#include <cstdio>
-#include <exception>
-
+#include <sstream>
+#include <iostream>
 static std::string s_recieved_headers;
 static size_t s_size_to_recieve = 0; 
 static size_t s_content_length = 0; 
 
 static size_t header_function(char* b, size_t size, size_t nitems, void *userdata) {
-    size_t numbytes = size * nitems;
+	size_t numbytes = size * nitems;
 	std::string tmp_string(b, numbytes);
-    tmp_string.erase(tmp_string.size() - 2);
+	tmp_string.erase(tmp_string.size() - 2);
+	if(tmp_string.find("Content-Range")!= std::string::npos)
+		sscanf(tmp_string.c_str(), "Content-Range: bytes 0-1/%d", &s_content_length);
+	
 	std::vector<std::string> *data = static_cast<std::vector<std::string>*>(userdata);
 	data->push_back(tmp_string);	
     return size * nitems;
 }
 
-static size_t write_function(void *ptr, size_t size, size_t nmemb, void *stream)
-{
-	std::memcpy(stream, ptr, size * nmemb);
-	return size * nmemb;
+static size_t write_function(void *ptr, size_t size, size_t nmemb, void *stream) {
+    ((std::string*)stream)->append((char*)ptr, size * nmemb);
+    return size * nmemb;
 }
 
 Result HTTPC::OpenContext(httpcContext *context, HTTPC_RequestMethod method, char* url, u32 use_defaultproxy)
 {
 	this->handle = curl_easy_init();
 	curl_easy_setopt(this->handle, CURLOPT_URL, url);
-	//curl_easy_setopt(this->handle, CURLOPT_VERBOSE, 1L);	
+	curl_easy_setopt(this->handle, CURLOPT_VERBOSE, 0L);	
+	curl_easy_setopt(this->handle, CURLOPT_SSL_VERIFYPEER, 0L);
+	curl_easy_setopt(this->handle, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_2TLS);
 	curl_easy_setopt(this->handle, CURLOPT_HEADERFUNCTION, header_function);
 	curl_easy_setopt(this->handle, CURLOPT_HEADERDATA, &this->headers);
 	
@@ -33,7 +36,7 @@ Result HTTPC::OpenContext(httpcContext *context, HTTPC_RequestMethod method, cha
 	{
 		case HTTPC_METHOD_GET:
 		case HTTPC_METHOD_HEAD:
-		curl_easy_setopt(this->handle, CURLOPT_NOBODY, 1L); //But we do not want the body right now
+		curl_easy_setopt(this->handle, CURLOPT_HTTPGET, 1L); //But we do not want the body right now
 		break;
 	}
 }
@@ -48,17 +51,17 @@ Result HTTPC::AddRequestHeaderField(httpcContext *context, char *name, char *val
 
 Result HTTPC::BeginRequest(httpcContext *context)
 {
-	//static struct curl_slist *header_chunk = curl_slist_append(header_chunk, (char*)"Range: bytes=0-1");
-	curl_easy_setopt(this->handle, CURLOPT_HTTPHEADER, this->header_chunk);
+	struct curl_slist *header_chunk = curl_slist_append(header_chunk, (char*)"Range: bytes=0-1");
+	curl_easy_setopt(this->handle, CURLOPT_HTTPHEADER, header_chunk);
 	this->res = curl_easy_perform(this->handle);
-	//curl_slist_free_all(header_chunk);
+	curl_slist_free_all(header_chunk);
 	return this->res; 
 }
 
 Result HTTPC::GetResponseStatusCode(httpcContext *context, u32 *statuscode)
 {
 	if(this->res != CURLE_OK) 
-		return 0xDED38;
+		return 0xDED65;
 	curl_easy_getinfo(this->handle, CURLINFO_RESPONSE_CODE, statuscode);
 	return 0;
 }
@@ -84,9 +87,7 @@ Result HTTPC::GetDownloadSizeState(httpcContext *context, u32 *downloadedsize, u
 	char val[10];
 	if(contentsize != nullptr)
 	{
-		this->GetResponseHeader(context, "Content-Length", val, 10);
-		sscanf(val, "%d", contentsize);
-		//std::cout << contentsize;
+		*contentsize = s_content_length;
 	}
 	if(downloadedsize != nullptr) *downloadedsize = s_size_to_recieve;
 }
@@ -96,15 +97,25 @@ Result HTTPC::RecieveData(httpcContext *context, u8 *buffer, u32 size)
 	this->headers.clear();
 	char *tmp_range = (char*)std::malloc(10);
 	sprintf(tmp_range, "%d-%d", s_size_to_recieve, size); 
-	//sprintf(tmp_range, "1-%d", size *sizeof(u8*)); 
 	curl_easy_setopt(this->handle, CURLOPT_RANGE, tmp_range);
 	free(tmp_range);
-	//curl_easy_setopt(this->handle, CURLOPT_HTTPHEADER, this->header_chunk);
+	curl_easy_setopt(this->handle, CURLOPT_HTTPHEADER, this->header_chunk);
 	curl_easy_setopt(this->handle, CURLOPT_HTTPGET, 1L); //Now get the body
 	curl_easy_setopt(this->handle, CURLOPT_WRITEFUNCTION, write_function);
-	curl_easy_setopt(this->handle, CURLOPT_WRITEDATA, buffer);
+	std::string stream;
+	curl_easy_setopt(this->handle, CURLOPT_WRITEDATA, &stream);
 	this->res = curl_easy_perform(this->handle);
+	std::memmove(buffer, stream.c_str(), size);
 	s_size_to_recieve += size;
+}
+
+Result HTTPC::SetSSLOpt(httpcContext *context, u32 option)
+{
+	switch(option)
+	{
+		case (1 << 8):
+		break;
+	}
 }
 
 Result HTTPC::CloseContext(httpcContext *context)
