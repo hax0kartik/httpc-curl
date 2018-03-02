@@ -1,23 +1,27 @@
 #include "httpc.h"
 #include <sstream>
 #include <iostream>
+#include <fstream>
+#include <iterator>
+#include <exception>
 static std::string s_recieved_headers;
 static size_t s_size_to_recieve = 0; 
 static size_t s_content_length = 0; 
 
-static size_t header_function(char* b, size_t size, size_t nitems, void *userdata) {
+static size_t header_function(char* b, size_t size, size_t nitems, void *userdata) 
+{
 	size_t numbytes = size * nitems;
 	std::string tmp_string(b, numbytes);
 	tmp_string.erase(tmp_string.size() - 2);
-	if(tmp_string.find("Content-Range")!= std::string::npos)
-		sscanf(tmp_string.c_str(), "Content-Range: bytes 0-1/%d", &s_content_length);
-	
+	if(tmp_string.empty())
+		return 0; // This will get us only the headers even if its a GET request
 	std::vector<std::string> *data = static_cast<std::vector<std::string>*>(userdata);
 	data->push_back(tmp_string);	
     return size * nitems;
 }
 
-static size_t write_function(void *ptr, size_t size, size_t nmemb, void *stream) {
+static size_t write_function(void *ptr, size_t size, size_t nmemb, void *stream) 
+{
     ((std::string*)stream)->append((char*)ptr, size * nmemb);
     return size * nmemb;
 }
@@ -26,7 +30,7 @@ Result HTTPC::OpenContext(httpcContext *context, HTTPC_RequestMethod method, cha
 {
 	this->handle = curl_easy_init();
 	curl_easy_setopt(this->handle, CURLOPT_URL, url);
-	curl_easy_setopt(this->handle, CURLOPT_VERBOSE, 0L);	
+	curl_easy_setopt(this->handle, CURLOPT_VERBOSE, 1L);	
 	curl_easy_setopt(this->handle, CURLOPT_SSL_VERIFYPEER, 0L);
 	curl_easy_setopt(this->handle, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_2TLS);
 	curl_easy_setopt(this->handle, CURLOPT_HEADERFUNCTION, header_function);
@@ -35,11 +39,26 @@ Result HTTPC::OpenContext(httpcContext *context, HTTPC_RequestMethod method, cha
 	switch(method)
 	{
 		case HTTPC_METHOD_GET:
-		case HTTPC_METHOD_HEAD:
-		curl_easy_setopt(this->handle, CURLOPT_HTTPGET, 1L); //But we do not want the body right now
+		curl_easy_setopt(this->handle, CURLOPT_CUSTOMREQUEST, (char*)"GET"); //But we do not want the body right now
 		break;
+		case HTTPC_METHOD_HEAD:
+		curl_easy_setopt(this->handle, CURLOPT_CUSTOMREQUEST, (char*)"HEAD"); 
+		break;
+		case HTTPC_METHOD_POST:
+		curl_easy_setopt(this->handle, CURLOPT_CUSTOMREQUEST, (char*)"POST");
+		break;
+		case HTTPC_METHOD_PUT:
+		curl_easy_setopt(this->handle, CURLOPT_CUSTOMREQUEST, (char*)"PUT");
+		break;
+		case HTTPC_METHOD_DELETE:
+		curl_easy_setopt(this->handle, CURLOPT_CUSTOMREQUEST, (char*)"DELETE");
+		break;
+		default:
+		return 0xDED53;
 	}
+	return 0;
 }
+
 
 Result HTTPC::AddRequestHeaderField(httpcContext *context, char *name, char *value)
 {
@@ -51,21 +70,11 @@ Result HTTPC::AddRequestHeaderField(httpcContext *context, char *name, char *val
 
 Result HTTPC::BeginRequest(httpcContext *context)
 {
-	struct curl_slist *header_chunk = curl_slist_append(header_chunk, (char*)"Range: bytes=0-1");
-	curl_easy_setopt(this->handle, CURLOPT_HTTPHEADER, header_chunk);
+	curl_easy_setopt(this->handle, CURLOPT_HTTPHEADER, this->header_chunk);
 	this->res = curl_easy_perform(this->handle);
-	curl_slist_free_all(header_chunk);
+	if(this->res == CURLE_WRITE_ERROR) this->res = CURLE_OK;
 	return this->res; 
 }
-
-Result HTTPC::GetResponseStatusCode(httpcContext *context, u32 *statuscode)
-{
-	if(this->res != CURLE_OK) 
-		return 0xDED65;
-	curl_easy_getinfo(this->handle, CURLINFO_RESPONSE_CODE, statuscode);
-	return 0;
-}
-
 
 Result HTTPC::GetResponseHeader(httpcContext *context, char* _name, char* _value, u32 valuebuf_maxsize)
 {
@@ -82,12 +91,21 @@ Result HTTPC::GetResponseHeader(httpcContext *context, char* _name, char* _value
 	return 0xDED92;
 }
 
+Result HTTPC::GetResponseStatusCode(httpcContext *context, u32 *statuscode)
+{
+	if(this->res != CURLE_OK) 
+		return 0xDED65;
+	curl_easy_getinfo(this->handle, CURLINFO_RESPONSE_CODE, statuscode);
+	return 0;
+}
+
 Result HTTPC::GetDownloadSizeState(httpcContext *context, u32 *downloadedsize, u32 *contentsize)
 {
 	char val[10];
 	if(contentsize != nullptr)
 	{
-		*contentsize = s_content_length;
+		this->GetResponseHeader(context, "Content-Length", val, 10);
+		sscanf(val, "%d", contentsize);
 	}
 	if(downloadedsize != nullptr) *downloadedsize = s_size_to_recieve;
 }
@@ -99,7 +117,10 @@ Result HTTPC::RecieveData(httpcContext *context, u8 *buffer, u32 size)
 	sprintf(tmp_range, "%d-%d", s_size_to_recieve, size); 
 	curl_easy_setopt(this->handle, CURLOPT_RANGE, tmp_range);
 	free(tmp_range);
-	curl_easy_setopt(this->handle, CURLOPT_HTTPHEADER, this->header_chunk);
+	// We don't need to deal with headers any longer
+	curl_easy_setopt(this->handle, CURLOPT_HEADERDATA, nullptr);
+	curl_easy_setopt(this->handle, CURLOPT_HEADERFUNCTION, nullptr);
+	
 	curl_easy_setopt(this->handle, CURLOPT_HTTPGET, 1L); //Now get the body
 	curl_easy_setopt(this->handle, CURLOPT_WRITEFUNCTION, write_function);
 	std::string stream;

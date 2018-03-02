@@ -16,15 +16,13 @@ int http(char *url)
 	//printf("ret :%d", ret);
 	u32 statuscode = 1;
 	httpc.GetResponseStatusCode(&context, &statuscode);
-	//std::cout<<"Statuscode : "<<(int)statuscode<< '\n';
+	std::cout<<"Statuscode : "<<(int)statuscode<< '\n';
 	if(statuscode > 300 && statuscode < 400)
 	{
 		char newUrl[1024];
 		httpc.GetResponseHeader(&context, "Location", newUrl, 1024);
-		//cout << newUrl;
-	
+		cout << newUrl;
 		httpc.CloseContext(&context);
-		//url = std::string(newUrl);
 		http(newUrl);
 		return 2;
 	}
@@ -35,7 +33,7 @@ int http(char *url)
 	cout<<"Content-Size"<< size << '\n';
 	u8 *buf = (u8*)std::malloc(size);
 	httpc.RecieveData(&context, buf, size);
-	FILE *file = fopen("file.tar.bz2", "w+b");
+	FILE *file = fopen("file.7z", "w+b");
 	fwrite(buf, size, 1, file);
 	fclose(file);
 	free(buf);
@@ -44,6 +42,6 @@ int http(char *url)
 
 int main()
 {
-	int ret = http("https://github.com/smealum/ctrulib/releases/download/v1.4.0/libctru-1.4.0.tar.bz2");
+	int ret = http("https://github.com/AuroraWright/Luma3DS/releases/download/v9.0/Luma3DSv9.0.7z");
 	//if(ret == 2) http((char*)url.c_str());
 }
